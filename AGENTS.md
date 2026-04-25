@@ -23,15 +23,13 @@ A companion `install.sh` handles installation, upgrades, and uninstallation of `
 
 - **Single file**: All logic lives in `./motd` — no external scripts or libraries
 - **Modes**: Default mode shows core stats; `--full` / `-f` enables extended output
-- **Opt-in features**: Public IP fetch and failed SSH login count are disabled by default, controlled by `MOTD_ENABLE_PUBLIC_IP` and `MOTD_ENABLE_FAILED_LOGINS` environment variables
 - **Caching**: Public IP is cached for 3 hours under `${XDG_CACHE_HOME:-~/.cache}/motd-public-ip`
 - **Health summary**: Computed from load, memory, swap, disk, and pending security updates; shown as OK or WARNING with reasons
 
 ## Conventions
 
-- All opt-in features must remain disabled by default (environment variable = `0`)
 - The color block must always use the `[ -t 1 ]` terminal check and fall back to empty strings
-- Keep commented-out code (CPU temp, sensors) in place — it is intentionally preserved for future use
+- CPU temperature is collected in `--full` mode via `sensors` (lm-sensors) or `/sys/class/thermal/thermal_zone0/temp` as a fallback
 - Update `README.md` whenever the script changes (new features, new options, changed behavior)
 - Format all Markdown files with `prettier` after editing (`prettier --write *.md`)
 

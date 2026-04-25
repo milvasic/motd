@@ -50,7 +50,6 @@ Run `motd` with no arguments for the standard view. Pass `--full` (or `-f`) for 
 | Load avg        | 1m / 5m / 15m load averages with process count      |
 | Memory          | Used vs total in GiB with percentage bar            |
 | Disk            | Root filesystem used vs total with percentage bar   |
-| Public IP       | Opt-in (see [Configuration](#configuration))        |
 | Uptime          | Human-readable uptime                               |
 | Pending updates | Available and security updates (Ubuntu/Debian)      |
 
@@ -58,14 +57,16 @@ Run `motd` with no arguments for the standard view. Pass `--full` (or `-f`) for 
 
 Includes everything in the standard view, plus:
 
-| Field      | Description                                         |
-| ---------- | --------------------------------------------------- |
-| Swap       | Swap used vs total with percentage bar              |
-| Docker     | Number of running containers (if Docker is present) |
-| Users      | Logged-in users and unique count                    |
-| Private IP | First IP from `hostname -I`                         |
-| Last login | Last login time for the current user                |
-| Failed SSH | Opt-in (see [Configuration](#configuration))        |
+| Field      | Description                                                           |
+| ---------- | --------------------------------------------------------------------- |
+| CPU temp   | CPU temperature (via `sensors` or `/sys/class/thermal`, if available) |
+| Swap       | Swap used vs total with percentage bar                                |
+| Docker     | Number of running containers (if Docker is present)                   |
+| Users      | Logged-in users and unique count                                      |
+| Private IP | First IP from `hostname -I`                                           |
+| Public IP  | Public IP address (requires `curl`, cached 3 hours)                   |
+| Last login | Last login time for the current user                                  |
+| Failed SSH | Failed SSH login attempts in the last 10 days (requires `journalctl`) |
 
 ### Auto-run on login
 
@@ -89,31 +90,15 @@ motd update
 
 Downloads and runs the latest installer from GitHub, replacing the installed binary.
 
-## Configuration
-
-All opt-in features are controlled by environment variables. Set them in your shell profile before calling `motd`.
-
-| Variable                    | Default | Description                                                                                              |
-| --------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
-| `MOTD_ENABLE_PUBLIC_IP`     | `0`     | Fetch and display public IP address (requires `curl`). Cached 3 hours.                                   |
-| `MOTD_ENABLE_FAILED_LOGINS` | `0`     | Count failed SSH login attempts in the last 10 days (requires `journalctl`, only shown in `--full` mode) |
-
-Example:
-
-```sh
-export MOTD_ENABLE_PUBLIC_IP=1
-export MOTD_ENABLE_FAILED_LOGINS=1
-motd --full
-```
-
 ## Optional dependencies
 
 `motd` works without any extra packages. The following are used when available:
 
-| Tool     | Purpose                                      |
-| -------- | -------------------------------------------- |
-| `figlet` | Renders the hostname as a large ASCII banner |
-| `curl`   | Fetches public IP (opt-in)                   |
+| Tool         | Purpose                                              |
+| ------------ | ---------------------------------------------------- |
+| `figlet`     | Renders the hostname as a large ASCII banner         |
+| `curl`       | Fetches public IP (in `--full` mode, cached 3 hours) |
+| `lm-sensors` | CPU temperature in `--full` mode                     |
 
 If optional tools are missing and the terminal is interactive, `motd` will offer to install them via `apt`.
 
