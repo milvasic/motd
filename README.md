@@ -31,8 +31,14 @@ This removes `motd` from `/usr/local/bin`.
 ## Usage
 
 ```
-motd [--full | -f]
+motd [show] [--full | -f]
+motd update
 ```
+
+| Command  | Description                                                              |
+| -------- | ------------------------------------------------------------------------ |
+| `show`   | Display the system dashboard (default — `motd` with no args runs `show`) |
+| `update` | Self-update `motd` to the latest version via its installer               |
 
 Run `motd` with no arguments for the standard view. Pass `--full` (or `-f`) for the extended view.
 
@@ -74,6 +80,14 @@ Or for full mode:
 ```sh
 motd --full
 ```
+
+### Self-update
+
+```sh
+motd update
+```
+
+Downloads and runs the latest installer from GitHub, replacing the installed binary.
 
 ## Configuration
 

@@ -3,7 +3,8 @@
 
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
+INSTALLER_SELF_URL="https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Terminal colors
@@ -30,25 +31,273 @@ fi
 C_WARN="${C_BOLD}${C_YELLOW}"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Arguments
+# Logging
 # ──────────────────────────────────────────────────────────────────────────────
-FULL_MODE=0
-ENSURE_TOOLS=0
-for _arg in "$@"; do
-	case "$_arg" in
-	--full | -f)
-		FULL_MODE=1
-		;;
-	--ensure-tools)
-		ENSURE_TOOLS=1
-		;;
-	esac
-done
+log() { printf "\n%s=== %s ===%s\n" "$C_BOLD" "$1" "$C_RESET" >&2; }
+error() { printf "%sERROR:%s %s\n" "$C_RED" "$C_RESET" "$1" >&2; }
+ok() { printf "%s%s%s\n" "$C_GREEN" "$1" "$C_RESET"; }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check optional tools (run with --ensure-tools to install missing packages)
+# show
 # ──────────────────────────────────────────────────────────────────────────────
-if [ "$ENSURE_TOOLS" = "1" ]; then
+show() {
+
+	# ──────────────────────────────────────────────────────────────────────────────
+	# Arguments
+	# ──────────────────────────────────────────────────────────────────────────────
+	FULL_MODE=0
+	for _arg in "$@"; do
+		case "$_arg" in
+		--full | -f)
+			FULL_MODE=1
+			;;
+		esac
+	done
+
+	# ──────────────────────────────────────────────────────────────────────────────
+	# Distro info
+	# ──────────────────────────────────────────────────────────────────────────────
+	DISTRIB_DESCRIPTION=""
+	if command -v lsb_release >/dev/null 2>&1; then
+		DISTRIB_DESCRIPTION=$(lsb_release -s -d 2>/dev/null) || true
+	fi
+	if [ -z "$DISTRIB_DESCRIPTION" ] && [ -r /etc/os-release ]; then
+		DISTRIB_DESCRIPTION=$(awk -F= '/^PRETTY_NAME=/{ gsub(/^"|"$/, "", $2); print $2; exit }' /etc/os-release)
+	fi
+	if [ -z "$DISTRIB_DESCRIPTION" ] && [ -r /etc/lsb-release ]; then
+		DISTRIB_DESCRIPTION=$(awk -F= '/^DISTRIB_DESCRIPTION=/{ gsub(/^"|"$/, "", $2); print $2; exit }' /etc/lsb-release)
+	fi
+	[ -z "$DISTRIB_DESCRIPTION" ] && DISTRIB_DESCRIPTION="Linux"
+
+	# ──────────────────────────────────────────────────────────────────────────────
+	# Gather stats
+	# ──────────────────────────────────────────────────────────────────────────────
+	cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
+	date=$(date +"%Y-%m-%d %H:%M:%S")
+	kernel=$(uname -r)
+	cpu_cores=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo)
+	cpu_load=$(awk '{ printf "%.2f (1m)  %.2f (5m)  %.2f (15m)", $1, $2, $3 }' /proc/loadavg)
+	load_pct_raw=$(awk -v c="$cpu_cores" '{ if (c < 1) c = 1; p = int($1 / c * 100); print p }' /proc/loadavg)
+	load_pct=$load_pct_raw
+	[ "$load_pct" -gt 100 ] && load_pct=100
+	cpu_overload=""
+	[ "$load_pct_raw" -gt 100 ] && cpu_overload=" (overload: ${load_pct_raw}%)"
+	cpu_processes=$(ps -e --no-headers | wc -l)
+	memory_usage=$(free -b | awk '/Mem:/  { printf "%.0f%% (%.2f/%.2f GiB)", ($3 / $2) * 100, $3 / (1024 * 1024 * 1024), $2 / (1024 * 1024 * 1024); }')
+	mem_pct=$(free -b | awk '/Mem:/  { printf "%d", ($3 / $2) * 100 }')
+	disk_usage=$(df -B1 / | awk 'NR==2 { printf "%.0f%% (%.2f/%.2f GiB)", ($3 / $2) * 100, $3 / (1024 * 1024 * 1024), $2 / (1024 * 1024 * 1024); }')
+	disk_pct=$(df -B1 / | awk 'NR==2 { printf "%d", ($3 / $2) * 100 }')
+	swap_usage=""
+	swap_pct=0
+	users_logged=""
+	users_count=0
+	if [ "$FULL_MODE" = "1" ]; then
+		swap_usage=$(free -b | awk '/Swap:/ { if ($2 == 0) { printf "0%% (0.00/0.00 GiB)"; } else { printf "%.0f%% (%.2f/%.2f GiB)", ($3 / $2) * 100, $3 / (1024 * 1024 * 1024), $2 / (1024 * 1024 * 1024); } }')
+		swap_pct=$(free -b | awk '/Swap:/ { if ($2 == 0) print 0; else printf "%d", ($3 / $2) * 100 }')
+		users_logged=$(who | awk '{ print $1 }' | sort -u | awk 'BEGIN { first = 1 } { if (!first) printf ", "; printf "%s", $1; first = 0 } END { if (first) printf "none" }')
+		users_count=$(who | awk '{ print $1 }' | sort -u | wc -l | awk '{ print $1 }')
+	fi
+	uptime_str=$(uptime -p)
+	private_ip=$(hostname -I 2>/dev/null | awk '{ print $1 }') || true
+
+	docker_running=""
+	if [ "$FULL_MODE" = "1" ] && command -v docker >/dev/null 2>&1; then
+		docker_running=$(docker ps -q 2>/dev/null | wc -l) || true
+	fi
+
+	cpu_temp=""
+	if [ "$FULL_MODE" = "1" ]; then
+		if command -v sensors >/dev/null 2>&1; then
+			cpu_temp=$(sensors 2>/dev/null | awk '
+			/Core 0:|Package id 0:|Tdie:/ {
+				match($0, /[+][0-9]+\.[0-9]+/)
+				if (RSTART) { printf "%.1f\302\260C", substr($0, RSTART+1, RLENGTH-1)+0; exit }
+			}') || true
+		fi
+		if [ -z "$cpu_temp" ] && [ -r /sys/class/thermal/thermal_zone0/temp ]; then
+			cpu_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk 'NF { printf "%.1f\302\260C", $1 / 1000 }') || true
+		fi
+	fi
+
+	# Public IP is fetched in full mode only, cached for 3 hours.
+	public_ip=""
+	if [ "$FULL_MODE" = "1" ] && command -v curl >/dev/null 2>&1; then
+		public_ip_cache_file=""
+		if [ -n "${XDG_CACHE_HOME:-}" ]; then
+			public_ip_cache_file="${XDG_CACHE_HOME}/motd-public-ip"
+		elif [ -n "${HOME:-}" ]; then
+			public_ip_cache_file="${HOME}/.cache/motd-public-ip"
+		else
+			public_ip_cache_file="/tmp/motd-${USER:-$(id -u)}-public-ip"
+		fi
+
+		public_ip_cache_dir=$(dirname "$public_ip_cache_file")
+		[ -d "$public_ip_cache_dir" ] || mkdir -p "$public_ip_cache_dir" 2>/dev/null
+
+		now_ts=$(date +%s 2>/dev/null)
+		cache_mtime=""
+		if [ -r "$public_ip_cache_file" ]; then
+			cache_mtime=$(stat -c %Y "$public_ip_cache_file" 2>/dev/null) || true
+		fi
+
+		if [ -n "$now_ts" ] && [ -n "$cache_mtime" ] && [ $((now_ts - cache_mtime)) -le 10800 ]; then
+			public_ip=$(cat "$public_ip_cache_file" 2>/dev/null) || true
+		else
+			[ -n "$cache_mtime" ] && rm -f "$public_ip_cache_file" 2>/dev/null
+			public_ip=$(curl -fsS --connect-timeout 3 --max-time 5 https://ifconfig.me 2>/dev/null) || true
+			[ -n "$public_ip" ] && printf "%s\n" "$public_ip" >"$public_ip_cache_file" 2>/dev/null
+		fi
+	fi
+
+	last_login=""
+	if command -v lastlog >/dev/null 2>&1; then
+		last_login=$(lastlog -u "${USER:-$(id -un)}" 2>/dev/null | tail -1 | awk '{ $1=""; sub(/^ */, ""); print }') || true
+	fi
+
+	failed_logins=""
+	if [ "$FULL_MODE" = "1" ] && command -v journalctl >/dev/null 2>&1; then
+		failed_logins=$(journalctl _COMM=sshd --since "240 hours ago" 2>/dev/null | grep -c "Failed password") || true
+	fi
+
+	updates_security=""
+	updates_total=""
+	if [ -r /var/lib/update-notifier/updates-available ]; then
+		updates_total_count=$(awk '
+		BEGIN { IGNORECASE=1 }
+		$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /updates?/ {
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^[0-9]+$/) { print $i; exit }
+			}
+		}
+	' /var/lib/update-notifier/updates-available)
+
+		if [ -n "$updates_total_count" ] && [ "$updates_total_count" -gt 0 ] 2>/dev/null; then
+			updates_total="${updates_total_count} updates available"
+			updates_security_count=$(awk '
+			BEGIN { IGNORECASE=1 }
+			$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /security/ {
+				for (i = 1; i <= NF; i++) {
+					if ($i ~ /^[0-9]+$/) { print $i; exit }
+				}
+			}
+		' /var/lib/update-notifier/updates-available)
+			if [ -n "$updates_security_count" ] && [ "$updates_security_count" -gt 0 ] 2>/dev/null; then
+				updates_security="${updates_security_count} security updates"
+			fi
+		fi
+	fi
+
+	# ──────────────────────────────────────────────────────────────────────────────
+	# Health summary
+	# ──────────────────────────────────────────────────────────────────────────────
+	health_state="OK"
+	health_reasons=""
+	if [ "$load_pct_raw" -gt 100 ]; then
+		health_state="WARNING"
+		health_reasons="${health_reasons}load "
+	fi
+	if [ "$mem_pct" -ge 90 ]; then
+		health_state="WARNING"
+		health_reasons="${health_reasons}memory "
+	fi
+	if [ "$FULL_MODE" = "1" ] && [ "$swap_pct" -ge 90 ]; then
+		health_state="WARNING"
+		health_reasons="${health_reasons}swap "
+	fi
+	if [ "$disk_pct" -ge 90 ]; then
+		health_state="WARNING"
+		health_reasons="${health_reasons}disk "
+	fi
+	if [ -n "$updates_security" ]; then
+		health_state="WARNING"
+		health_reasons="${health_reasons}security-updates "
+	fi
+
+	if [ "$health_state" = "WARNING" ]; then
+		health_color=$C_YELLOW
+	else
+		health_color=$C_GREEN
+	fi
+
+	if [ -n "$health_reasons" ]; then
+		health_summary="$health_state (${health_reasons% })"
+	else
+		health_summary="$health_state"
+	fi
+
+	# ──────────────────────────────────────────────────────────────────────────────
+	# Utilities
+	# ──────────────────────────────────────────────────────────────────────────────
+	# bar <percent> — fixed-width progress bar, red when >= 80%
+	bar() {
+		_pct=$1
+		_width=10
+		_filled=$((_pct * _width / 100))
+		[ "$_filled" -gt "$_width" ] && _filled=$_width
+		[ "$_pct" -ge 80 ] && printf '%s' "$C_RED" || printf '%s' "$C_WHITE"
+		printf '['
+		_i=0
+		while [ "$_i" -lt "$_filled" ]; do
+			printf '#'
+			_i=$((_i + 1))
+		done
+		while [ "$_i" -lt "$_width" ]; do
+			printf ' '
+			_i=$((_i + 1))
+		done
+		printf ']'
+		printf '%s' "$C_RESET"
+	}
+
+	# ──────────────────────────────────────────────────────────────────────────────
+	# Banner
+	# ──────────────────────────────────────────────────────────────────────────────
+	printf "%s" "$C_MAGENTA"
+	if command -v figlet >/dev/null 2>&1; then
+		printf "%s" "$C_BOLD"
+		figlet -f small -w "$cols" "$(hostname)"
+	else
+		printf "%s" "$C_BOLD"
+		printf '%s\n' "$(hostname)"
+	fi
+	printf "%s" "$C_RESET"
+	printf "Welcome to %s%s%s (%s).\n" "$C_BLUE" "$DISTRIB_DESCRIPTION" "$C_RESET" "$kernel"
+
+	# ──────────────────────────────────────────────────────────────────────────────
+	# Output
+	# ──────────────────────────────────────────────────────────────────────────────
+	printf "%sSystem information as of:%s %s\n\n" "$C_GREEN" "$C_RESET" "$date"
+
+	printf "%sHealth:%s\t\t%s%s%s%s\n" "$C_GREEN" "$C_RESET" "$health_color" "$C_BOLD" "$health_summary" "$C_RESET"
+	[ -n "$cpu_temp" ] && printf "%sCPU temp:%s\t%s\n" "$C_GREEN" "$C_RESET" "$cpu_temp"
+	printf "%sLoad avg:%s\t" "$C_GREEN" "$C_RESET" && bar "$load_pct"
+	printf " %s (%s processes)%s\n" "$cpu_load" "$cpu_processes" "$cpu_overload"
+	printf "%sMemory:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$mem_pct"
+	printf " %s\n" "$memory_usage"
+	printf "%sDisk:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$disk_pct"
+	printf " %s\n" "$disk_usage"
+	if [ "$FULL_MODE" = "1" ]; then
+		printf "%sSwap:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$swap_pct"
+		printf " %s\n" "$swap_usage"
+		[ -n "$docker_running" ] && printf "%sDocker:%s\t\t%s running containers\n" "$C_GREEN" "$C_RESET" "$docker_running"
+		printf "%sUsers:%s\t\t%s (%s unique)\n" "$C_GREEN" "$C_RESET" "$users_logged" "$users_count"
+	fi
+	[ -n "$public_ip" ] && printf "%sPublic IP:%s\t%s\n" "$C_GREEN" "$C_RESET" "$public_ip"
+	[ "$FULL_MODE" = "1" ] && [ -n "$private_ip" ] && printf "%sPrivate IP:%s\t%s\n" "$C_GREEN" "$C_RESET" "$private_ip"
+	[ "$FULL_MODE" = "1" ] && [ -n "$last_login" ] && printf "%sLast login:%s\t%s\n" "$C_GREEN" "$C_RESET" "$last_login"
+	[ -n "$failed_logins" ] && printf "%sFailed logins:%s\t%s in the last 10 days\n" "$C_GREEN" "$C_RESET" "$failed_logins"
+
+	printf "\nSystem is %s%s%s\n" "$C_GREEN" "$uptime_str" "$C_RESET"
+
+	[ -n "$updates_total" ] && printf "\n%s\n" "$updates_total"
+	[ -n "$updates_security" ] && printf "%s%s%s\n" "$C_WARN" "$updates_security" "$C_RESET"
+
+} # end show
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ensure-tools
+# ──────────────────────────────────────────────────────────────────────────────
+ensure_tools() {
 	missing_pkgs=""
 	need_sensors_detect=0
 	command -v figlet >/dev/null 2>&1 || missing_pkgs="$missing_pkgs figlet"
@@ -68,245 +317,41 @@ if [ "$ENSURE_TOOLS" = "1" ]; then
 		fi
 		printf "\n"
 	else
-		printf "%sAll optional tools are installed.%s\n" "$C_GREEN" "$C_RESET"
+		ok "All optional tools are installed."
 	fi
-	exit 0
-fi
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Distro info
-# ──────────────────────────────────────────────────────────────────────────────
-DISTRIB_DESCRIPTION=""
-if command -v lsb_release >/dev/null 2>&1; then
-	DISTRIB_DESCRIPTION=$(lsb_release -s -d 2>/dev/null) || true
-fi
-if [ -z "$DISTRIB_DESCRIPTION" ] && [ -r /etc/os-release ]; then
-	DISTRIB_DESCRIPTION=$(awk -F= '/^PRETTY_NAME=/{ gsub(/^"|"$/, "", $2); print $2; exit }' /etc/os-release)
-fi
-if [ -z "$DISTRIB_DESCRIPTION" ] && [ -r /etc/lsb-release ]; then
-	DISTRIB_DESCRIPTION=$(awk -F= '/^DISTRIB_DESCRIPTION=/{ gsub(/^"|"$/, "", $2); print $2; exit }' /etc/lsb-release)
-fi
-[ -z "$DISTRIB_DESCRIPTION" ] && DISTRIB_DESCRIPTION="Linux"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Gather stats
-# ──────────────────────────────────────────────────────────────────────────────
-cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
-date=$(date +"%Y-%m-%d %H:%M:%S")
-kernel=$(uname -r)
-cpu_cores=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo)
-cpu_load=$(awk '{ printf "%.2f (1m)  %.2f (5m)  %.2f (15m)", $1, $2, $3 }' /proc/loadavg)
-load_pct_raw=$(awk -v c="$cpu_cores" '{ if (c < 1) c = 1; p = int($1 / c * 100); print p }' /proc/loadavg)
-load_pct=$load_pct_raw
-[ "$load_pct" -gt 100 ] && load_pct=100
-cpu_overload=""
-[ "$load_pct_raw" -gt 100 ] && cpu_overload=" (overload: ${load_pct_raw}%)"
-cpu_processes=$(ps -e --no-headers | wc -l)
-memory_usage=$(free -b | awk '/Mem:/  { printf "%.0f%% (%.2f/%.2f GiB)", ($3 / $2) * 100, $3 / (1024 * 1024 * 1024), $2 / (1024 * 1024 * 1024); }')
-mem_pct=$(free -b | awk '/Mem:/  { printf "%d", ($3 / $2) * 100 }')
-disk_usage=$(df -B1 / | awk 'NR==2 { printf "%.0f%% (%.2f/%.2f GiB)", ($3 / $2) * 100, $3 / (1024 * 1024 * 1024), $2 / (1024 * 1024 * 1024); }')
-disk_pct=$(df -B1 / | awk 'NR==2 { printf "%d", ($3 / $2) * 100 }')
-swap_usage=""
-swap_pct=0
-users_logged=""
-users_count=0
-if [ "$FULL_MODE" = "1" ]; then
-	swap_usage=$(free -b | awk '/Swap:/ { if ($2 == 0) { printf "0%% (0.00/0.00 GiB)"; } else { printf "%.0f%% (%.2f/%.2f GiB)", ($3 / $2) * 100, $3 / (1024 * 1024 * 1024), $2 / (1024 * 1024 * 1024); } }')
-	swap_pct=$(free -b | awk '/Swap:/ { if ($2 == 0) print 0; else printf "%d", ($3 / $2) * 100 }')
-	users_logged=$(who | awk '{ print $1 }' | sort -u | awk 'BEGIN { first = 1 } { if (!first) printf ", "; printf "%s", $1; first = 0 } END { if (first) printf "none" }')
-	users_count=$(who | awk '{ print $1 }' | sort -u | wc -l | awk '{ print $1 }')
-fi
-uptime_str=$(uptime -p)
-private_ip=$(hostname -I 2>/dev/null | awk '{ print $1 }') || true
-
-docker_running=""
-if [ "$FULL_MODE" = "1" ] && command -v docker >/dev/null 2>&1; then
-	docker_running=$(docker ps -q 2>/dev/null | wc -l) || true
-fi
-
-cpu_temp=""
-if [ "$FULL_MODE" = "1" ]; then
-	if command -v sensors >/dev/null 2>&1; then
-		cpu_temp=$(sensors 2>/dev/null | awk '
-			/Core 0:|Package id 0:|Tdie:/ {
-				match($0, /[+][0-9]+\.[0-9]+/)
-				if (RSTART) { printf "%.1f\302\260C", substr($0, RSTART+1, RLENGTH-1)+0; exit }
-			}') || true
-	fi
-	if [ -z "$cpu_temp" ] && [ -r /sys/class/thermal/thermal_zone0/temp ]; then
-		cpu_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk 'NF { printf "%.1f\302\260C", $1 / 1000 }') || true
-	fi
-fi
-
-# Public IP is fetched in full mode only, cached for 3 hours.
-public_ip=""
-if [ "$FULL_MODE" = "1" ] && command -v curl >/dev/null 2>&1; then
-	public_ip_cache_file=""
-	if [ -n "${XDG_CACHE_HOME:-}" ]; then
-		public_ip_cache_file="${XDG_CACHE_HOME}/motd-public-ip"
-	elif [ -n "${HOME:-}" ]; then
-		public_ip_cache_file="${HOME}/.cache/motd-public-ip"
-	else
-		public_ip_cache_file="/tmp/motd-${USER:-$(id -u)}-public-ip"
-	fi
-
-	public_ip_cache_dir=$(dirname "$public_ip_cache_file")
-	[ -d "$public_ip_cache_dir" ] || mkdir -p "$public_ip_cache_dir" 2>/dev/null
-
-	now_ts=$(date +%s 2>/dev/null)
-	cache_mtime=""
-	if [ -r "$public_ip_cache_file" ]; then
-		cache_mtime=$(stat -c %Y "$public_ip_cache_file" 2>/dev/null) || true
-	fi
-
-	if [ -n "$now_ts" ] && [ -n "$cache_mtime" ] && [ $((now_ts - cache_mtime)) -le 10800 ]; then
-		public_ip=$(cat "$public_ip_cache_file" 2>/dev/null) || true
-	else
-		[ -n "$cache_mtime" ] && rm -f "$public_ip_cache_file" 2>/dev/null
-		public_ip=$(curl -fsS --connect-timeout 3 --max-time 5 https://ifconfig.me 2>/dev/null) || true
-		[ -n "$public_ip" ] && printf "%s\n" "$public_ip" >"$public_ip_cache_file" 2>/dev/null
-	fi
-fi
-
-last_login=""
-if command -v lastlog >/dev/null 2>&1; then
-	last_login=$(lastlog -u "${USER:-$(id -un)}" 2>/dev/null | tail -1 | awk '{ $1=""; sub(/^ */, ""); print }') || true
-fi
-
-failed_logins=""
-if [ "$FULL_MODE" = "1" ] && command -v journalctl >/dev/null 2>&1; then
-	failed_logins=$(journalctl _COMM=sshd --since "240 hours ago" 2>/dev/null | grep -c "Failed password") || true
-fi
-
-updates_security=""
-updates_total=""
-if [ -r /var/lib/update-notifier/updates-available ]; then
-	updates_total_count=$(awk '
-		BEGIN { IGNORECASE=1 }
-		$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /updates?/ {
-			for (i = 1; i <= NF; i++) {
-				if ($i ~ /^[0-9]+$/) { print $i; exit }
-			}
-		}
-	' /var/lib/update-notifier/updates-available)
-
-	if [ -n "$updates_total_count" ] && [ "$updates_total_count" -gt 0 ] 2>/dev/null; then
-		updates_total="${updates_total_count} updates available"
-		updates_security_count=$(awk '
-			BEGIN { IGNORECASE=1 }
-			$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /security/ {
-				for (i = 1; i <= NF; i++) {
-					if ($i ~ /^[0-9]+$/) { print $i; exit }
-				}
-			}
-		' /var/lib/update-notifier/updates-available)
-		if [ -n "$updates_security_count" ] && [ "$updates_security_count" -gt 0 ] 2>/dev/null; then
-			updates_security="${updates_security_count} security updates"
-		fi
-	fi
-fi
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Health summary
-# ──────────────────────────────────────────────────────────────────────────────
-health_state="OK"
-health_reasons=""
-if [ "$load_pct_raw" -gt 100 ]; then
-	health_state="WARNING"
-	health_reasons="${health_reasons}load "
-fi
-if [ "$mem_pct" -ge 90 ]; then
-	health_state="WARNING"
-	health_reasons="${health_reasons}memory "
-fi
-if [ "$FULL_MODE" = "1" ] && [ "$swap_pct" -ge 90 ]; then
-	health_state="WARNING"
-	health_reasons="${health_reasons}swap "
-fi
-if [ "$disk_pct" -ge 90 ]; then
-	health_state="WARNING"
-	health_reasons="${health_reasons}disk "
-fi
-if [ -n "$updates_security" ]; then
-	health_state="WARNING"
-	health_reasons="${health_reasons}security-updates "
-fi
-
-if [ "$health_state" = "WARNING" ]; then
-	health_color=$C_YELLOW
-else
-	health_color=$C_GREEN
-fi
-
-if [ -n "$health_reasons" ]; then
-	health_summary="$health_state (${health_reasons% })"
-else
-	health_summary="$health_state"
-fi
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Utilities
-# ──────────────────────────────────────────────────────────────────────────────
-# bar <percent> — fixed-width progress bar, red when >= 80%
-bar() {
-	_pct=$1
-	_width=10
-	_filled=$((_pct * _width / 100))
-	[ "$_filled" -gt "$_width" ] && _filled=$_width
-	[ "$_pct" -ge 80 ] && printf '%s' "$C_RED" || printf '%s' "$C_WHITE"
-	printf '['
-	_i=0
-	while [ "$_i" -lt "$_filled" ]; do
-		printf '#'
-		_i=$((_i + 1))
-	done
-	while [ "$_i" -lt "$_width" ]; do
-		printf ' '
-		_i=$((_i + 1))
-	done
-	printf ']'
-	printf '%s' "$C_RESET"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Banner
+# update
 # ──────────────────────────────────────────────────────────────────────────────
-printf "%s" "$C_MAGENTA"
-if command -v figlet >/dev/null 2>&1; then
-	printf "%s" "$C_BOLD"
-	figlet -f small -w "$cols" "$(hostname)"
+update() {
+	if command -v curl >/dev/null 2>&1; then
+		sh -c "$(curl -fsSL "${INSTALLER_SELF_URL}")" -- --yes
+	elif command -v wget >/dev/null 2>&1; then
+		sh -c "$(wget -qO- "${INSTALLER_SELF_URL}")" -- --yes
+	else
+		error "Neither curl nor wget found. Please install one and try again."
+		exit 1
+	fi
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Dispatch
+# ──────────────────────────────────────────────────────────────────────────────
+COMMAND="${1:-}"
+
+if [[ -z "$COMMAND" || "$COMMAND" == -* ]]; then
+	show "$@"
 else
-	printf "%s" "$C_BOLD"
-	printf '%s\n' "$(hostname)"
+	shift
+	case "$COMMAND" in
+	show) show "$@" ;;
+	ensure-tools) ensure_tools ;;
+	update) update ;;
+	version | -v) echo "${VERSION}" ;;
+	*)
+		error "Unknown command: $COMMAND"
+		exit 1
+		;;
+	esac
 fi
-printf "%s" "$C_RESET"
-printf "Welcome to %s%s%s (%s).\n" "$C_BLUE" "$DISTRIB_DESCRIPTION" "$C_RESET" "$kernel"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Output
-# ──────────────────────────────────────────────────────────────────────────────
-printf "%sSystem information as of:%s %s\n\n" "$C_GREEN" "$C_RESET" "$date"
-
-printf "%sHealth:%s\t\t%s%s%s%s\n" "$C_GREEN" "$C_RESET" "$health_color" "$C_BOLD" "$health_summary" "$C_RESET"
-[ -n "$cpu_temp" ] && printf "%sCPU temp:%s\t%s\n" "$C_GREEN" "$C_RESET" "$cpu_temp"
-printf "%sLoad avg:%s\t" "$C_GREEN" "$C_RESET" && bar "$load_pct"
-printf " %s (%s processes)%s\n" "$cpu_load" "$cpu_processes" "$cpu_overload"
-printf "%sMemory:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$mem_pct"
-printf " %s\n" "$memory_usage"
-printf "%sDisk:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$disk_pct"
-printf " %s\n" "$disk_usage"
-if [ "$FULL_MODE" = "1" ]; then
-	printf "%sSwap:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$swap_pct"
-	printf " %s\n" "$swap_usage"
-	[ -n "$docker_running" ] && printf "%sDocker:%s\t\t%s running containers\n" "$C_GREEN" "$C_RESET" "$docker_running"
-	printf "%sUsers:%s\t\t%s (%s unique)\n" "$C_GREEN" "$C_RESET" "$users_logged" "$users_count"
-fi
-[ -n "$public_ip" ] && printf "%sPublic IP:%s\t%s\n" "$C_GREEN" "$C_RESET" "$public_ip"
-[ "$FULL_MODE" = "1" ] && [ -n "$private_ip" ] && printf "%sPrivate IP:%s\t%s\n" "$C_GREEN" "$C_RESET" "$private_ip"
-[ "$FULL_MODE" = "1" ] && [ -n "$last_login" ] && printf "%sLast login:%s\t%s\n" "$C_GREEN" "$C_RESET" "$last_login"
-[ -n "$failed_logins" ] && printf "%sFailed logins:%s\t%s in the last 10 days\n" "$C_GREEN" "$C_RESET" "$failed_logins"
-
-printf "\nSystem is %s%s%s\n" "$C_GREEN" "$uptime_str" "$C_RESET"
-
-[ -n "$updates_total" ] && printf "\n%s\n" "$updates_total"
-[ -n "$updates_security" ] && printf "%s%s%s\n" "$C_WARN" "$updates_security" "$C_RESET"
