@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Terminal colors
@@ -29,35 +29,48 @@ else
 fi
 C_WARN="${C_BOLD}${C_YELLOW}"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Arguments
+# ──────────────────────────────────────────────────────────────────────────────
 FULL_MODE=0
-case "${1:-}" in
---full | -f)
-	FULL_MODE=1
-	;;
-esac
+ENSURE_TOOLS=0
+for _arg in "$@"; do
+	case "$_arg" in
+	--full | -f)
+		FULL_MODE=1
+		;;
+	--ensure-tools)
+		ENSURE_TOOLS=1
+		;;
+	esac
+done
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check optional tools
+# Check optional tools (run with --ensure-tools to install missing packages)
 # ──────────────────────────────────────────────────────────────────────────────
-missing_pkgs=""
-# CPU temperature support disabled.
-# need_sensors_detect=0
-command -v figlet >/dev/null 2>&1 || missing_pkgs="$missing_pkgs figlet"
-# command -v sensors >/dev/null 2>&1 || {
-# 	missing_pkgs="$missing_pkgs lm-sensors"
-# 	need_sensors_detect=1
-# }
-command -v curl >/dev/null 2>&1 || missing_pkgs="$missing_pkgs curl"
+if [ "$ENSURE_TOOLS" = "1" ]; then
+	missing_pkgs=""
+	need_sensors_detect=0
+	command -v figlet >/dev/null 2>&1 || missing_pkgs="$missing_pkgs figlet"
+	command -v sensors >/dev/null 2>&1 || {
+		missing_pkgs="$missing_pkgs lm-sensors"
+		need_sensors_detect=1
+	}
+	command -v curl >/dev/null 2>&1 || missing_pkgs="$missing_pkgs curl"
 
-if [ -n "$missing_pkgs" ] && [ -t 0 ]; then
-	printf "%sOptional tools not installed:%s %s\n" "$C_YELLOW" "$C_RESET" "$missing_pkgs"
-	printf "Install now? [y/N] "
-	read -r _answer </dev/tty
-	if [ "$_answer" = "y" ] || [ "$_answer" = "Y" ]; then
-		sudo apt install -y $missing_pkgs
-		# [ "$need_sensors_detect" = "1" ] && sudo sensors-detect --auto
+	if [ -n "$missing_pkgs" ]; then
+		printf "%sOptional tools not installed:%s %s\n" "$C_YELLOW" "$C_RESET" "$missing_pkgs"
+		printf "Install now? [y/N] "
+		read -r _answer </dev/tty
+		if [ "$_answer" = "y" ] || [ "$_answer" = "Y" ]; then
+			sudo apt install -y $missing_pkgs
+			[ "$need_sensors_detect" = "1" ] && sudo sensors-detect --auto
+		fi
+		printf "\n"
+	else
+		printf "%sAll optional tools are installed.%s\n" "$C_GREEN" "$C_RESET"
 	fi
-	printf "\n"
+	exit 0
 fi
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -111,22 +124,23 @@ if [ "$FULL_MODE" = "1" ] && command -v docker >/dev/null 2>&1; then
 	docker_running=$(docker ps -q 2>/dev/null | wc -l) || true
 fi
 
-# CPU temperature section intentionally disabled.
-# cpu_temp=""
-# if command -v sensors >/dev/null 2>&1; then
-# 	cpu_temp=$(sensors 2>/dev/null | awk '
-# 		/Core 0:|Package id 0:|Tdie:/ {
-# 			match($0, /[+][0-9]+\.[0-9]+/)
-# 			if (RSTART) { printf "%.1f\302\260C", substr($0, RSTART+1, RLENGTH-1)+0; exit }
-# 		}')
-# fi
-# if [ -z "$cpu_temp" ] && [ -r /sys/class/thermal/thermal_zone0/temp ]; then
-# 	cpu_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk 'NF { printf "%.1f\302\260C", $1 / 1000 }')
-# fi
+cpu_temp=""
+if [ "$FULL_MODE" = "1" ]; then
+	if command -v sensors >/dev/null 2>&1; then
+		cpu_temp=$(sensors 2>/dev/null | awk '
+			/Core 0:|Package id 0:|Tdie:/ {
+				match($0, /[+][0-9]+\.[0-9]+/)
+				if (RSTART) { printf "%.1f\302\260C", substr($0, RSTART+1, RLENGTH-1)+0; exit }
+			}') || true
+	fi
+	if [ -z "$cpu_temp" ] && [ -r /sys/class/thermal/thermal_zone0/temp ]; then
+		cpu_temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk 'NF { printf "%.1f\302\260C", $1 / 1000 }') || true
+	fi
+fi
 
-# Opt-in via MOTD_ENABLE_PUBLIC_IP=1, cached for 3 hours.
+# Public IP is fetched in full mode only, cached for 3 hours.
 public_ip=""
-if [ "$FULL_MODE" = "1" ] && [ "${MOTD_ENABLE_PUBLIC_IP:-0}" = "1" ] && command -v curl >/dev/null 2>&1; then
+if [ "$FULL_MODE" = "1" ] && command -v curl >/dev/null 2>&1; then
 	public_ip_cache_file=""
 	if [ -n "${XDG_CACHE_HOME:-}" ]; then
 		public_ip_cache_file="${XDG_CACHE_HOME}/motd-public-ip"
@@ -159,38 +173,36 @@ if command -v lastlog >/dev/null 2>&1; then
 	last_login=$(lastlog -u "${USER:-$(id -un)}" 2>/dev/null | tail -1 | awk '{ $1=""; sub(/^ */, ""); print }') || true
 fi
 
-# Opt-in via MOTD_ENABLE_FAILED_LOGINS=1.
 failed_logins=""
-if [ "$FULL_MODE" = "1" ] && [ "${MOTD_ENABLE_FAILED_LOGINS:-0}" = "1" ] && command -v journalctl >/dev/null 2>&1; then
+if [ "$FULL_MODE" = "1" ] && command -v journalctl >/dev/null 2>&1; then
 	failed_logins=$(journalctl _COMM=sshd --since "240 hours ago" 2>/dev/null | grep -c "Failed password") || true
 fi
 
-updates_total=""
 updates_security=""
+updates_total=""
 if [ -r /var/lib/update-notifier/updates-available ]; then
 	updates_total_count=$(awk '
 		BEGIN { IGNORECASE=1 }
-		$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /updates?/ && $0 !~ /security/ {
+		$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /updates?/ {
 			for (i = 1; i <= NF; i++) {
 				if ($i ~ /^[0-9]+$/) { print $i; exit }
 			}
 		}
 	' /var/lib/update-notifier/updates-available)
 
-	updates_security_count=$(awk '
-		BEGIN { IGNORECASE=1 }
-		$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /security/ {
-			for (i = 1; i <= NF; i++) {
-				if ($i ~ /^[0-9]+$/) { print $i; exit }
-			}
-		}
-	' /var/lib/update-notifier/updates-available)
-
-	if [ -n "$updates_total_count" ]; then
+	if [ -n "$updates_total_count" ] && [ "$updates_total_count" -gt 0 ] 2>/dev/null; then
 		updates_total="${updates_total_count} updates available"
-	fi
-	if [ -n "$updates_security_count" ] && [ "$updates_security_count" -gt 0 ] 2>/dev/null; then
-		updates_security="${updates_security_count} security updates"
+		updates_security_count=$(awk '
+			BEGIN { IGNORECASE=1 }
+			$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /security/ {
+				for (i = 1; i <= NF; i++) {
+					if ($i ~ /^[0-9]+$/) { print $i; exit }
+				}
+			}
+		' /var/lib/update-notifier/updates-available)
+		if [ -n "$updates_security_count" ] && [ "$updates_security_count" -gt 0 ] 2>/dev/null; then
+			updates_security="${updates_security_count} security updates"
+		fi
 	fi
 fi
 
@@ -276,7 +288,7 @@ printf "Welcome to %s%s%s (%s).\n" "$C_BLUE" "$DISTRIB_DESCRIPTION" "$C_RESET" "
 printf "%sSystem information as of:%s %s\n\n" "$C_GREEN" "$C_RESET" "$date"
 
 printf "%sHealth:%s\t\t%s%s%s%s\n" "$C_GREEN" "$C_RESET" "$health_color" "$C_BOLD" "$health_summary" "$C_RESET"
-# [ -n "$cpu_temp" ] && printf "%sCPU temp:%s\t%s\n" "$C_GREEN" "$C_RESET" "$cpu_temp"
+[ -n "$cpu_temp" ] && printf "%sCPU temp:%s\t%s\n" "$C_GREEN" "$C_RESET" "$cpu_temp"
 printf "%sLoad avg:%s\t" "$C_GREEN" "$C_RESET" && bar "$load_pct"
 printf " %s (%s processes)%s\n" "$cpu_load" "$cpu_processes" "$cpu_overload"
 printf "%sMemory:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$mem_pct"
@@ -296,8 +308,5 @@ fi
 
 printf "\nSystem is %s%s%s\n" "$C_GREEN" "$uptime_str" "$C_RESET"
 
-if [ -n "$updates_total" ] || [ -n "$updates_security" ]; then
-	printf "\n"
-	[ -n "$updates_total" ] && printf "%s\n" "$updates_total"
-	[ -n "$updates_security" ] && printf "%s%s%s\n" "$C_WARN" "$updates_security" "$C_RESET"
-fi
+[ -n "$updates_total" ] && printf "\n%s\n" "$updates_total"
+[ -n "$updates_security" ] && printf "%s%s%s\n" "$C_WARN" "$updates_security" "$C_RESET"
