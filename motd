@@ -1,49 +1,99 @@
 #!/usr/bin/env bash
-# motd
+# motd — system information dashboard at login
+# https://github.com/milvasic/motd
 
 set -euo pipefail
 
-VERSION="0.3.0"
-INSTALLER_SELF_URL="https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh"
+VERSION="0.3.1"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Terminal colors
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Help ──────────────────────────────────────────────────────────────────────
+help() {
+	colorize >&2 <<'EOF'
+A single-file Bash script that displays a system information dashboard at login.
+
+Usage:
+  motd [command] [show-flags]
+
+Commands:
+  show                      # Display the system dashboard (default)
+  ensure-tools              # Install optional tools (figlet, lm-sensors, curl)
+  update                    # Update motd to the latest version
+  version, --version, -v    # Print version
+  help, --help, -h          # Show this message
+
+Show flags:
+  --full, -f                # Show extended output (swap, Docker, users, IPs, etc.)
+
+Standard output includes:
+  - System health (OK/WARNING with reasons)
+  - CPU temperature, load average, memory, disk usage
+  - Uptime, pending updates
+
+Full mode (--full) also includes:
+  - Swap usage, running Docker containers, logged-in users
+  - Public and private IPs, last login, failed SSH attempts
+
+Examples:
+  motd                      # Standard view
+  motd --full               # Extended view
+  motd update               # Self-update to latest version
+EOF
+	exit 1
+}
+
+# ── Colors & logging ──────────────────────────────────────────────────────────
 if [ -t 1 ]; then
-	C_RED=$'\033[0;31m'
-	C_GREEN=$'\033[0;32m'
-	C_YELLOW=$'\033[0;33m'
-	C_BLUE=$'\033[0;34m'
-	C_MAGENTA=$'\033[0;35m'
-	C_WHITE=$'\033[0;37m'
-	C_BOLD=$'\033[1m'
-	C_RESET=$'\033[0m'
+	RED=$'\033[0;31m'
+	GREEN=$'\033[0;32m'
+	YELLOW=$'\033[0;33m'
+	BLUE=$'\033[0;34m'
+	MAGENTA=$'\033[0;35m'
+	WHITE=$'\033[0;37m'
+	CYAN=$'\033[0;36m'
+	BOLD=$'\033[1m'
+	RESET=$'\033[0m'
 else
-	C_RED=""
-	C_GREEN=""
-	C_YELLOW=""
-	C_BLUE=""
-	C_MAGENTA=""
-	C_WHITE=""
-	C_BOLD=""
-	C_RESET=""
+	RED=""
+	GREEN=""
+	YELLOW=""
+	BLUE=""
+	MAGENTA=""
+	WHITE=""
+	CYAN=""
+	BOLD=""
+	RESET=""
 fi
-C_WARN="${C_BOLD}${C_YELLOW}"
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Logging
-# ──────────────────────────────────────────────────────────────────────────────
-log() { printf "\n%s=== %s ===%s\n" "$C_BOLD" "$1" "$C_RESET" >&2; }
-error() { printf "%sERROR:%s %s\n" "$C_RED" "$C_RESET" "$1" >&2; }
-ok() { printf "%s%s%s\n" "$C_GREEN" "$1" "$C_RESET"; }
+log() { printf "\n${BOLD}=== %s ===${RESET}\n" "$1" >&2; }
+error() { printf "${RED}ERROR:${RESET} %s\n" "$1" >&2; }
+ok() { printf "${GREEN}%s${RESET}\n" "$1"; }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# show
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Help colorizer ───────────────────────────────────────────────────────────
+colorize_line() {
+	sed \
+		-e "s/\\(^\\|[^[:alnum:]_'-]\\)\\(motd\\)\\([^[:alnum:]_'-]\\|$\\)/\\1${GREEN}\\2${RESET}\\3/g" \
+		-e "s/\\(^\\|[^[:alnum:]_'-]\\)\\(show\\|ensure-tools\\|update\\|version\\|help\\)\\([^[:alnum:]_'-]\\|$\\)/\\1${YELLOW}\\2${RESET}\\3/g" \
+		-e "s/--[a-z][a-z-]*/${CYAN}&${RESET}/g" \
+		-e "s/\([ ,]\)\(-[a-z]\)/\\1${CYAN}\\2${RESET}/g"
+}
+
+colorize() {
+	local line pre post
+	while IFS= read -r line; do
+		if [[ "$line" == *'#'* ]]; then
+			pre="${line%%#*}"
+			post="${line#*#}"
+			pre="$(printf '%s' "$pre" | colorize_line)"
+			printf '%s%s#%s%s\n' "$pre" "$GREEN" "$post" "$RESET"
+		else
+			printf '%s\n' "$line" | colorize_line
+		fi
+	done
+}
+
+# ── show ─────────────────────────────────────────────────────────────────────
 show() {
-	# ──────────────────────────────────────────────────────────────────────────────
-	# Arguments
-	# ──────────────────────────────────────────────────────────────────────────────
+	# ── Arguments ─────────────────────────────────────────────────────────────
 	FULL_MODE=0
 	for _arg in "$@"; do
 		case "$_arg" in
@@ -53,9 +103,7 @@ show() {
 		esac
 	done
 
-	# ──────────────────────────────────────────────────────────────────────────────
-	# Distro info
-	# ──────────────────────────────────────────────────────────────────────────────
+	# ── Distro info ───────────────────────────────────────────────────────────
 	DISTRIB_DESCRIPTION=""
 	if command -v lsb_release >/dev/null 2>&1; then
 		DISTRIB_DESCRIPTION=$(lsb_release -s -d 2>/dev/null) || true
@@ -68,9 +116,7 @@ show() {
 	fi
 	[ -z "$DISTRIB_DESCRIPTION" ] && DISTRIB_DESCRIPTION="Linux"
 
-	# ──────────────────────────────────────────────────────────────────────────────
-	# Gather stats
-	# ──────────────────────────────────────────────────────────────────────────────
+	# ── Gather stats ──────────────────────────────────────────────────────────
 	cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
 	date=$(date +"%Y-%m-%d %H:%M:%S")
 	kernel=$(uname -r)
@@ -186,9 +232,7 @@ show() {
 		fi
 	fi
 
-	# ──────────────────────────────────────────────────────────────────────────────
-	# Health summary
-	# ──────────────────────────────────────────────────────────────────────────────
+	# ── Health summary ────────────────────────────────────────────────────────
 	health_state="OK"
 	health_reasons=""
 	if [ "$load_pct_raw" -gt 100 ]; then
@@ -213,9 +257,9 @@ show() {
 	fi
 
 	if [ "$health_state" = "WARNING" ]; then
-		health_color=$C_YELLOW
+		health_color=$YELLOW
 	else
-		health_color=$C_GREEN
+		health_color=$GREEN
 	fi
 
 	if [ -n "$health_reasons" ]; then
@@ -224,16 +268,14 @@ show() {
 		health_summary="$health_state"
 	fi
 
-	# ──────────────────────────────────────────────────────────────────────────────
-	# Utilities
-	# ──────────────────────────────────────────────────────────────────────────────
+	# ── Utilities ────────────────────────────────────────────────────────────────
 	# bar <percent> — fixed-width progress bar, red when >= 80%
 	bar() {
 		_pct=$1
 		_width=10
 		_filled=$((_pct * _width / 100))
 		[ "$_filled" -gt "$_width" ] && _filled=$_width
-		[ "$_pct" -ge 80 ] && printf '%s' "$C_RED" || printf '%s' "$C_WHITE"
+		[ "$_pct" -ge 80 ] && printf '%s' "$RED" || printf '%s' "$WHITE"
 		printf '['
 		_i=0
 		while [ "$_i" -lt "$_filled" ]; do
@@ -245,57 +287,51 @@ show() {
 			_i=$((_i + 1))
 		done
 		printf ']'
-		printf '%s' "$C_RESET"
+		printf '%s' "$RESET"
 	}
 
-	# ──────────────────────────────────────────────────────────────────────────────
-	# Banner
-	# ──────────────────────────────────────────────────────────────────────────────
-	printf "%s" "$C_MAGENTA"
+	# ── Banner ───────────────────────────────────────────────────────────────────
+	printf "%s" "$MAGENTA"
 	if command -v figlet >/dev/null 2>&1; then
-		printf "%s" "$C_BOLD"
+		printf "%s" "$BOLD"
 		figlet -f small -w "$cols" "$(hostname)"
 	else
-		printf "%s" "$C_BOLD"
+		printf "%s" "$BOLD"
 		printf '%s\n' "$(hostname)"
 	fi
-	printf "%s" "$C_RESET"
-	printf "Welcome to %s%s%s (%s).\n" "$C_BLUE" "$DISTRIB_DESCRIPTION" "$C_RESET" "$kernel"
+	printf "%s" "$RESET"
+	printf "Welcome to %s%s%s (%s).\n" "$BLUE" "$DISTRIB_DESCRIPTION" "$RESET" "$kernel"
 
-	# ──────────────────────────────────────────────────────────────────────────────
-	# Output
-	# ──────────────────────────────────────────────────────────────────────────────
-	printf "%sSystem information as of:%s %s\n\n" "$C_GREEN" "$C_RESET" "$date"
+	# ── Output ───────────────────────────────────────────────────────────────────
+	printf "%sSystem information as of:%s %s\n\n" "$GREEN" "$RESET" "$date"
 
-	printf "%sHealth:%s\t\t%s%s%s%s\n" "$C_GREEN" "$C_RESET" "$health_color" "$C_BOLD" "$health_summary" "$C_RESET"
-	[ -n "$cpu_temp" ] && printf "%sCPU temp:%s\t%s\n" "$C_GREEN" "$C_RESET" "$cpu_temp"
-	printf "%sLoad avg:%s\t" "$C_GREEN" "$C_RESET" && bar "$load_pct"
+	printf "%sHealth:%s\t\t%s%s%s%s\n" "$GREEN" "$RESET" "$health_color" "$BOLD" "$health_summary" "$RESET"
+	[ -n "$cpu_temp" ] && printf "%sCPU temp:%s\t%s\n" "$GREEN" "$RESET" "$cpu_temp"
+	printf "%sLoad avg:%s\t" "$GREEN" "$RESET" && bar "$load_pct"
 	printf " %s (%s processes)%s\n" "$cpu_load" "$cpu_processes" "$cpu_overload"
-	printf "%sMemory:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$mem_pct"
+	printf "%sMemory:%s\t\t" "$GREEN" "$RESET" && bar "$mem_pct"
 	printf " %s\n" "$memory_usage"
-	printf "%sDisk:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$disk_pct"
+	printf "%sDisk:%s\t\t" "$GREEN" "$RESET" && bar "$disk_pct"
 	printf " %s\n" "$disk_usage"
 	if [ "$FULL_MODE" = "1" ]; then
-		printf "%sSwap:%s\t\t" "$C_GREEN" "$C_RESET" && bar "$swap_pct"
+		printf "%sSwap:%s\t\t" "$GREEN" "$RESET" && bar "$swap_pct"
 		printf " %s\n" "$swap_usage"
-		[ -n "$docker_running" ] && printf "%sDocker:%s\t\t%s running containers\n" "$C_GREEN" "$C_RESET" "$docker_running"
-		printf "%sUsers:%s\t\t%s (%s unique)\n" "$C_GREEN" "$C_RESET" "$users_logged" "$users_count"
+		[ -n "$docker_running" ] && printf "%sDocker:%s\t\t%s running containers\n" "$GREEN" "$RESET" "$docker_running"
+		printf "%sUsers:%s\t\t%s (%s unique)\n" "$GREEN" "$RESET" "$users_logged" "$users_count"
 	fi
-	[ -n "$public_ip" ] && printf "%sPublic IP:%s\t%s\n" "$C_GREEN" "$C_RESET" "$public_ip"
-	[ "$FULL_MODE" = "1" ] && [ -n "$private_ip" ] && printf "%sPrivate IP:%s\t%s\n" "$C_GREEN" "$C_RESET" "$private_ip"
-	[ "$FULL_MODE" = "1" ] && [ -n "$last_login" ] && printf "%sLast login:%s\t%s\n" "$C_GREEN" "$C_RESET" "$last_login"
-	[ -n "$failed_logins" ] && printf "%sFailed logins:%s\t%s in the last 10 days\n" "$C_GREEN" "$C_RESET" "$failed_logins"
+	[ -n "$public_ip" ] && printf "%sPublic IP:%s\t%s\n" "$GREEN" "$RESET" "$public_ip"
+	[ "$FULL_MODE" = "1" ] && [ -n "$private_ip" ] && printf "%sPrivate IP:%s\t%s\n" "$GREEN" "$RESET" "$private_ip"
+	[ "$FULL_MODE" = "1" ] && [ -n "$last_login" ] && printf "%sLast login:%s\t%s\n" "$GREEN" "$RESET" "$last_login"
+	[ -n "$failed_logins" ] && printf "%sFailed logins:%s\t%s in the last 10 days\n" "$GREEN" "$RESET" "$failed_logins"
 
-	printf "\nSystem is %s%s%s\n" "$C_GREEN" "$uptime_str" "$C_RESET"
+	printf "\nSystem is %s%s%s\n" "$GREEN" "$uptime_str" "$RESET"
 
 	[ -n "$updates_total" ] && printf "\n%s\n" "$updates_total"
-	[ -n "$updates_security" ] && printf "%s%s%s\n" "$C_WARN" "$updates_security" "$C_RESET"
+	[ -n "$updates_security" ] && printf "%s%s%s\n" "$BOLD$YELLOW" "$updates_security" "$RESET"
 
 } # end show
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ensure-tools
-# ──────────────────────────────────────────────────────────────────────────────
+# ── ensure-tools ─────────────────────────────────────────────────────────────
 ensure_tools() {
 	missing_pkgs=""
 	need_sensors_detect=0
@@ -307,7 +343,7 @@ ensure_tools() {
 	command -v curl >/dev/null 2>&1 || missing_pkgs="$missing_pkgs curl"
 
 	if [ -n "$missing_pkgs" ]; then
-		printf "%sOptional tools not installed:%s %s\n" "$C_YELLOW" "$C_RESET" "$missing_pkgs"
+		printf "%sOptional tools not installed:%s %s\n" "$YELLOW" "$RESET" "$missing_pkgs"
 		printf "Install now? [y/N] "
 		read -r _answer </dev/tty
 		if [ "$_answer" = "y" ] || [ "$_answer" = "Y" ]; then
@@ -320,37 +356,45 @@ ensure_tools() {
 	fi
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# update
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Update command ────────────────────────────────────────────────────────────
+INSTALLER_SELF_URL="https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh"
 update() {
 	if command -v curl >/dev/null 2>&1; then
-		sh -c "$(curl -fsSL "${INSTALLER_SELF_URL}")" -- --yes
+		bash -c "$(curl -fsSL "${INSTALLER_SELF_URL}")" -- --yes
 	elif command -v wget >/dev/null 2>&1; then
-		sh -c "$(wget -qO- "${INSTALLER_SELF_URL}")" -- --yes
+		bash -c "$(wget -qO- "${INSTALLER_SELF_URL}")" -- --yes
 	else
 		error "Neither curl nor wget found. Please install one and try again."
 		exit 1
 	fi
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Dispatch
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Main dispatch ─────────────────────────────────────────────────────────────
 COMMAND="${1:-}"
 
-if [[ -z "$COMMAND" || "$COMMAND" == -* ]]; then
+case "${COMMAND}" in
+help | --help | -h)
+	help
+	;;
+version | --version | -v)
+	echo "${VERSION}"
+	;;
+"")
 	show "$@"
-else
+	;;
+-*)
+	show "$@"
+	;;
+*)
 	shift
 	case "$COMMAND" in
 	show) show "$@" ;;
 	ensure-tools) ensure_tools ;;
 	update) update ;;
-	version | -v) echo "${VERSION}" ;;
 	*)
-		error "Unknown command: $COMMAND"
-		exit 1
+		error "Unknown command: ${COMMAND}"
+		help
 		;;
 	esac
-fi
+	;;
+esac

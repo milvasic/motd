@@ -8,9 +8,9 @@ A companion `install.sh` handles installation, upgrades, and uninstallation of `
 
 ## Code Style
 
-- Bash with `set -euo pipefail`
+- Bash with `set -euo pipefail` and `#!/usr/bin/env bash` shebang
 - Functions use snake_case
-- Color-coded output via ANSI escape sequences (`$'\033[...]'` syntax), set to empty strings when stdout is not a terminal
+- Color-coded output via ANSI escape sequences with TTY detection (`[ -t 1 ]`); disabled for pipes/redirects
 - Commands that may fail in pipes or substitutions use `|| true` to stay compatible with `set -euo pipefail`
 - Section headers use the double-separator style:
   ```
@@ -47,6 +47,15 @@ There is no test suite. After making changes, verify syntax with:
 
 ```sh
 bash -n motd
+bash -n install.sh
+bash -n install-regen.sh
 ```
 
-Then do a quick smoke-test by running `./motd` and `./motd --full`.
+Then do a quick smoke-test by running:
+
+```sh
+./motd
+./motd --full
+./motd show
+./motd update
+```

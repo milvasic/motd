@@ -7,7 +7,7 @@ Shows hostname, distro, kernel, health summary, CPU load, memory, disk, uptime, 
 ## Install
 
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh)"
 ```
 
 This installs `motd` to `/usr/local/bin`. If a previous version is already installed, the installer will prompt you to upgrade.
@@ -15,7 +15,7 @@ This installs `motd` to `/usr/local/bin`. If a previous version is already insta
 For non-interactive environments (CI, scripts), pass `--yes` to auto-approve upgrades:
 
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh)" -- --yes
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh)" -- --yes
 ```
 
 `wget` is also supported if `curl` is not available.
@@ -23,7 +23,7 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/milvasic/motd/refs/heads/m
 ## Uninstall
 
 ```sh
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh)" -- --uninstall
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/milvasic/motd/refs/heads/main/install.sh)" -- --uninstall
 ```
 
 This removes `motd` from `/usr/local/bin`.
