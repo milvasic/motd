@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-VERSION="0.3.1"
+VERSION="0.4.0"
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 help() {
@@ -226,6 +226,45 @@ show() {
 				}
 			}
 		' /var/lib/update-notifier/updates-available)
+			if [ -n "$updates_security_count" ] && [ "$updates_security_count" -gt 0 ] 2>/dev/null; then
+				updates_security="${updates_security_count} security updates"
+			fi
+		fi
+	elif command -v apt-get >/dev/null 2>&1; then
+		# Fallback for systems without update-notifier (e.g. Debian): query apt directly.
+		# Result is cached for 3 hours using the same TTL pattern as public IP.
+		_apt_cache_file=""
+		if [ -n "${XDG_CACHE_HOME:-}" ]; then
+			_apt_cache_file="${XDG_CACHE_HOME}/motd-apt-updates"
+		elif [ -n "${HOME:-}" ]; then
+			_apt_cache_file="${HOME}/.cache/motd-apt-updates"
+		else
+			_apt_cache_file="/tmp/motd-${USER:-$(id -u)}-apt-updates"
+		fi
+
+		_apt_cache_dir=$(dirname "$_apt_cache_file")
+		[ -d "$_apt_cache_dir" ] || mkdir -p "$_apt_cache_dir" 2>/dev/null || true
+
+		_now_ts=$(date +%s 2>/dev/null) || _now_ts=""
+		_apt_cache_mtime=""
+		if [ -r "$_apt_cache_file" ]; then
+			_apt_cache_mtime=$(stat -c %Y "$_apt_cache_file" 2>/dev/null) || true
+		fi
+
+		if [ -n "$_now_ts" ] && [ -n "$_apt_cache_mtime" ] && [ $((_now_ts - _apt_cache_mtime)) -le 10800 ]; then
+			updates_total_count=$(sed -n '1p' "$_apt_cache_file" 2>/dev/null) || true
+			updates_security_count=$(sed -n '2p' "$_apt_cache_file" 2>/dev/null) || true
+		else
+			[ -n "$_apt_cache_mtime" ] && rm -f "$_apt_cache_file" 2>/dev/null || true
+			apt-get update -qq 2>/dev/null || true
+			_apt_sim=$(apt-get -s upgrade 2>/dev/null) || true
+			updates_total_count=$(printf '%s\n' "$_apt_sim" | awk '/^[0-9]+ upgraded/ { print $1 }') || true
+			updates_security_count=$(printf '%s\n' "$_apt_sim" | grep -c '^Inst.*security') || updates_security_count=0
+			printf '%s\n%s\n' "${updates_total_count:-0}" "${updates_security_count:-0}" >"$_apt_cache_file" 2>/dev/null || true
+		fi
+
+		if [ -n "$updates_total_count" ] && [ "$updates_total_count" -gt 0 ] 2>/dev/null; then
+			updates_total="${updates_total_count} updates available"
 			if [ -n "$updates_security_count" ] && [ "$updates_security_count" -gt 0 ] 2>/dev/null; then
 				updates_security="${updates_security_count} security updates"
 			fi
