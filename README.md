@@ -44,14 +44,14 @@ Run `motd` with no arguments for the standard view. Pass `--full` (or `-f`) for 
 
 ### Standard output
 
-| Field           | Description                                         |
-| --------------- | --------------------------------------------------- |
-| Health          | OK or WARNING, with reasons (load/memory/disk/etc.) |
-| Load avg        | 1m / 5m / 15m load averages with process count      |
-| Memory          | Used vs total in GiB with percentage bar            |
-| Disk            | Root filesystem used vs total with percentage bar   |
-| Uptime          | Human-readable uptime                               |
-| Pending updates | Available and security updates (Ubuntu/Debian)      |
+| Field           | Description                                                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Health          | OK or WARNING, with reasons (load/memory/disk/etc.)                                                                            |
+| Load avg        | 1m / 5m / 15m load averages with process count                                                                                 |
+| Memory          | Used vs total in GiB with percentage bar                                                                                       |
+| Disk            | Root filesystem used vs total with percentage bar                                                                              |
+| Uptime          | Human-readable uptime                                                                                                          |
+| Pending updates | Available and security updates; reads `update-notifier` cache when present, otherwise falls back to `apt-get` (cached 3 hours) |
 
 ### Full mode (`--full` / `-f`)
 
