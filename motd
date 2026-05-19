@@ -207,9 +207,9 @@ show() {
 	updates_security=""
 	updates_total=""
 	if [ -r /var/lib/update-notifier/updates-available ]; then
-		updates_total_count=$(awk '
+		updates_total_count=$(awk -v full="$FULL_MODE" '
 		BEGIN { IGNORECASE=1 }
-		$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /updates?/ {
+		$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /updates?/ && (full == "1" || $0 !~ /ESM/) {
 			for (i = 1; i <= NF; i++) {
 				if ($i ~ /^[0-9]+$/) { print $i; exit }
 			}
@@ -218,9 +218,9 @@ show() {
 
 		if [ -n "$updates_total_count" ] && [ "$updates_total_count" -gt 0 ] 2>/dev/null; then
 			updates_total="${updates_total_count} updates available"
-			updates_security_count=$(awk '
+			updates_security_count=$(awk -v full="$FULL_MODE" '
 			BEGIN { IGNORECASE=1 }
-			$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /security/ {
+			$0 ~ /^[[:space:]]*[0-9]+[[:space:]]/ && $0 ~ /security/ && (full == "1" || $0 !~ /ESM/) {
 				for (i = 1; i <= NF; i++) {
 					if ($i ~ /^[0-9]+$/) { print $i; exit }
 				}
