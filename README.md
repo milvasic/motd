@@ -51,7 +51,7 @@ Run `motd` with no arguments for the standard view. Pass `--full` (or `-f`) for 
 | Memory          | Used vs total in GiB with percentage bar                                                                                       |
 | Disk            | Root filesystem used vs total with percentage bar                                                                              |
 | Uptime          | Human-readable uptime                                                                                                          |
-| Pending updates | Available and security updates; reads `update-notifier` cache when present, otherwise falls back to `apt-get` (cached 3 hours) |
+| Pending updates | Available and security updates (ESM Apps excluded); reads `update-notifier` cache when present, otherwise falls back to `apt-get` (cached 3 hours). ESM counts are included in `--full` mode. |
 
 ### Full mode (`--full` / `-f`)
 
